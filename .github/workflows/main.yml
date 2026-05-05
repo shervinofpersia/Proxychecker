@@ -4,15 +4,14 @@ on:
   push:
     branches: [ main, master ]
   schedule:
-    # هر ۶ ساعت یکبار اجرا می‌شود (می‌توانید زمان را تغییر دهید)
     - cron: '0 */6 * * *'
-  workflow_dispatch:   # اجرای دستی از داشبورد GitHub
+  workflow_dispatch:
 
 jobs:
   scan:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # لازم برای push کردن فایل خروجی
+      contents: write
 
     steps:
       - name: Checkout repository
@@ -29,5 +28,5 @@ jobs:
       - name: Commit and push alive proxies list
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: '📡 به‌روزرسانی لیست پراکسی‌های فعال'
+          commit_message: '📡 به‌روزرسانی لیست پراکسی‌های فعال (هندشیک SOCKS5)'
           file_pattern: 'alive_proxies/alive.txt'
