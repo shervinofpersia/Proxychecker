@@ -1,0 +1,33 @@
+name: Check SOCKS Proxies
+
+on:
+  push:
+    branches: [ main, master ]
+  schedule:
+    # هر ۶ ساعت یکبار اجرا می‌شود (می‌توانید زمان را تغییر دهید)
+    - cron: '0 */6 * * *'
+  workflow_dispatch:   # اجرای دستی از داشبورد GitHub
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # لازم برای push کردن فایل خروجی
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Run proxy checker
+        run: python check_proxies.py
+
+      - name: Commit and push alive proxies list
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: '📡 به‌روزرسانی لیست پراکسی‌های فعال'
+          file_pattern: 'alive_proxies/alive.txt'
