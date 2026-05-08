@@ -1,115 +1,60 @@
-#!/usr/bin/env python3
-"""
-اسکریپت تست پراکسی SOCKS5 با هندشیک واقعی و احراز هویت کاربر.
-socks://Og@62.220.126.56:PORT
-محدوده پورت: 30000 تا 39999
-پورت‌های زنده در فایل alive_proxies/alive.txt ذخیره می‌شوند.
-"""
-
-import asyncio
-import os
+import socks
+import socket
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys
 
-HOST = "62.220.126.56"
-PORT_START = 30000
-PORT_END = 39999
+TARGET_IP = "62.220.126.92"
 USERNAME = "Og"
-PASSWORD = ""           # رمز خالی
-OUTPUT_DIR = "alive_proxies"
-OUTPUT_FILE = os.path.join(OUTPUT_DIR, "alive.txt")
-TIMEOUT = 3.0           # ثانیه
-CONCURRENCY = 200       # تعداد هم‌زمان (کمتر از قبل به خاطر افزایش بار شبکه)
+PASSWORD = ""  # رمز خالی
+TEST_HOST = "google.com"
+TEST_PORT = 80
+TIMEOUT = 5
+THREADS = 200
+START_PORT = 20000
+END_PORT = 30000
+OUTPUT_FILE = "good_socks5.txt"
 
+def test_proxy(port):
+    """یک پروکسی SOCKS5 را تست می‌کند و در صورت موفقیت، آدرس کامل آن را برمی‌گرداند."""
+    proxy_addr = TARGET_IP
+    proxy_port = port
 
-async def socks5_ping(host: str, port: int, username: str, password: str) -> bool:
-    """
-    انجام هندشیک کامل SOCKS5 (با احراز هویت username/password) و
-    ارسال یک درخواست CONNECT به 0.0.0.0:0 و بررسی دریافت پاسخ.
-    در صورت موفقیت True برمی‌گرداند.
-    """
+    s = socks.socksocket()
+    s.set_proxy(socks.SOCKS5, proxy_addr, proxy_port, username=USERNAME, password=PASSWORD)
+    s.settimeout(TIMEOUT)
+
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(host, port), timeout=TIMEOUT
-        )
-
-        # مرحله ۱: ارسال سلام و انتخاب متد احراز هویت
-        # پشتیبانی از متد username/password (0x02)
-        greeting = bytes([0x05, 0x01, 0x02])
-        writer.write(greeting)
-        await writer.drain()
-
-        # خواندن پاسخ انتخاب متد (۲ بایت)
-        resp = await asyncio.wait_for(reader.readexactly(2), timeout=TIMEOUT)
-        version, method = resp[0], resp[1]
-        if version != 0x05 or method == 0xFF:
-            writer.close()
-            return False
-        if method != 0x02:
-            # اگر متد دیگری برگرداند، fail
-            writer.close()
-            return False
-
-        # مرحله ۲: احراز هویت username/password
-        user_bytes = username.encode()
-        pass_bytes = password.encode()
-        # ساختار: 0x01 | len(user) | user | len(pass) | pass
-        auth_msg = bytes([0x01, len(user_bytes)]) + user_bytes + bytes([len(pass_bytes)]) + pass_bytes
-        writer.write(auth_msg)
-        await writer.drain()
-
-        # خواندن پاسخ احراز هویت (۲ بایت: version, status)
-        auth_resp = await asyncio.wait_for(reader.readexactly(2), timeout=TIMEOUT)
-        if auth_resp[0] != 0x01 or auth_resp[1] != 0x00:
-            writer.close()
-            return False
-
-        # مرحله ۳ (تأیید نهایی): ارسال درخواست CONNECT و بررسی دریافت پاسخ
-        # مقصد: 0.0.0.0:0 (آدرس نامعتبر – فقط برای تست پاسخ سرور)
-        connect_req = bytes([
-            0x05, 0x01, 0x00,       # VER, CMD=CONNECT, RSV
-            0x01,                   # ATYP = IPv4
-            0x00, 0x00, 0x00, 0x00, # IP 0.0.0.0
-            0x00, 0x00              # Port 0
-        ])
-        writer.write(connect_req)
-        await writer.drain()
-
-        # انتظار برای حداقل ۵ بایت اول پاسخ (تا header کامل دریافت شود)
-        header = await asyncio.wait_for(reader.readexactly(5), timeout=TIMEOUT)
-        # اگر به اینجا رسید یعنی پاسخ دریافت شده → پراکسی زنده است
-        writer.close()
-        return True
-
+        s.connect((TEST_HOST, TEST_PORT))
+        s.close()
+        return f"socks5://{USERNAME}@{TARGET_IP}:{port}"
     except Exception:
-        return False
+        return None
+    finally:
+        s.close()
 
+def main():
+    print(f"[*] Start scanning {START_PORT}-{END_PORT} on {TARGET_IP} with user '{USERNAME}'")
+    working = []
+    ports = range(START_PORT, END_PORT + 1)
 
-async def main():
-    semaphore = asyncio.Semaphore(CONCURRENCY)
+    with ThreadPoolExecutor(max_workers=THREADS) as executor:
+        future_to_port = {executor.submit(test_proxy, port): port for port in ports}
+        for future in as_completed(future_to_port):
+            result = future.result()
+            if result:
+                working.append(result)
+                print(f"[+] {result}")
+                # بلافاصله نوشتن توی فایل برای نمایش زنده
+                with open(OUTPUT_FILE, 'a') as f:
+                    f.write(result + "\n")
 
-    async def worker(port: int) -> str | None:
-        async with semaphore:
-            alive = await socks5_ping(HOST, port, USERNAME, PASSWORD)
-            return f"socks://{USERNAME}@{HOST}:{port}" if alive else None
-
-    ports = range(PORT_START, PORT_END + 1)
-    print(f"شروع بررسی {len(ports)} پورت با هندشیک SOCKS5 ...")
-    tasks = [worker(p) for p in ports]
-    results = await asyncio.gather(*tasks)
-
-    alive = [addr for addr in results if addr is not None]
-
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        f.write("\n".join(alive) + "\n")
-
-    print(f"پراکسی‌های فعال (هندشیک موفق): {len(alive)}")
-    print(f"خروجی در: {OUTPUT_FILE}")
-
+    print(f"\n[✓] Scan finished. Found {len(working)} working proxies. Results in {OUTPUT_FILE}")
+    if not working:
+        # اگر هیچی پیدا نشد، فایل خالی بسازیم که خطا نده
+        open(OUTPUT_FILE, 'w').close()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        print("لغو توسط کاربر.")
-        sys.exit(1)
+    # فایل خروجی را از قبل خالی می‌کنیم
+    with open(OUTPUT_FILE, 'w') as f:
+        pass
+    main()
